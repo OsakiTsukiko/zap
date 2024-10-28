@@ -26,6 +26,8 @@ pub fn init(
             .patch = putUser,
             .delete = deleteUser,
             .options = optionsUser,
+            .unknown = unknownMethod,
+            .unset = unknownMethod,
         }),
     };
 }
@@ -51,6 +53,11 @@ fn userIdFromPath(self: *Self, path: []const u8) ?usize {
         return std.fmt.parseUnsigned(usize, idstr, 10) catch null;
     }
     return null;
+}
+
+fn unknownMethod(_: *zap.Endpoint, r: zap.Request) void {
+    r.setStatus(.method_not_allowed);
+    r.sendBody("METHOD NOT ALLOWED!!1") catch return;
 }
 
 fn getUser(e: *zap.Endpoint, r: zap.Request) void {

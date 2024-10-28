@@ -28,6 +28,8 @@ pub const Settings = struct {
     patch: ?RequestFn = null,
     /// callback to OPTIONS request handler
     options: ?RequestFn = null,
+    // callback to UNKNOWN request handler (custom method)
+    unknown: ?RequestFn = null,
     /// Only applicable to Authenticating Endpoint: handler for unauthorized requests
     unauthorized: ?RequestFn = null,
     // callback to any unset request type
@@ -49,6 +51,7 @@ pub fn init(s: Settings) Endpoint {
             .delete = s.delete orelse s.unset orelse @panic("Endpoint handler `.delete` is unset, and no `.unset` handler is provided."),
             .patch = s.patch orelse s.unset orelse @panic("Endpoint handler `.patch` is unset, and no `.unset` handler is provided."),
             .options = s.options orelse s.unset orelse @panic("Endpoint handler `.options` is unset, and no `.unset` handler is provided."),
+            .unknown = s.unknown orelse s.unset orelse @panic("Endpoint handler `.unknown` is unset, and no `.unset` handler is provided."),
             .unauthorized = s.unauthorized orelse s.unset orelse @panic("Endpoint handler `.unauthorized` is unset, and no `.unset` handler is provided."),
             .unset = s.unset,
         },
@@ -70,7 +73,12 @@ pub fn onRequest(self: *Endpoint, r: zap.Request) void {
         .DELETE => self.settings.delete.?(self, r),
         .PATCH => self.settings.patch.?(self, r),
         .OPTIONS => self.settings.options.?(self, r),
-        else => return,
+        .UNKNOWN => self.settings.unknown.?(self, r),
+        else => {
+            std.log.err("Something went really bad!", .{});
+            r.setStatus(.internal_server_error);
+            return;
+        },
     }
 }
 
@@ -100,6 +108,7 @@ pub fn Authenticating(comptime Authenticator: type) type {
                     .delete = if (e.settings.delete != null) delete else null,
                     .patch = if (e.settings.patch != null) patch else null,
                     .options = if (e.settings.options != null) options else null,
+                    .unknown = if (e.settings.unknown != null) unknown else null,
                     .unauthorized = e.settings.unauthorized,
                     .unset = e.settings.unset,
                 }),
@@ -228,7 +237,27 @@ pub fn Authenticating(comptime Authenticator: type) type {
                         return;
                     }
                 },
-                .AuthOK => authEp.ep.settings.put.?(authEp.ep, r),
+                .AuthOK => authEp.ep.settings.options.?(authEp.ep, r),
+                .Handled => {},
+            }
+        }
+
+        /// UNKNOWN: here, the auth_endpoint will be passed in as endpoint.
+        /// Authenticates UNKNOWN requests using the Authenticator.
+        pub fn unknown(e: *Endpoint, r: zap.Request) void {
+            const authEp: *Self = @fieldParentPtr("auth_endpoint", e);
+            switch (authEp.authenticator.authenticateRequest(&r)) {
+                .AuthFailed => {
+                    if (e.settings.unauthorized) |unauthorized| {
+                        unauthorized(authEp.ep, r);
+                        return;
+                    } else {
+                        r.setStatus(.unauthorized);
+                        r.sendBody("UNAUTHORIZED") catch return;
+                        return;
+                    }
+                },
+                .AuthOK => authEp.ep.settings.unknown.?(authEp.ep, r),
                 .Handled => {},
             }
         }
